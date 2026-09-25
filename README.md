@@ -11,10 +11,10 @@ gbinsureapi 为医院信息系统提供标准化医保结算接口，覆盖身�
 ## 主要功能
 
 - 参保人身份核验：基于身份证号和医保卡号返回参保状态、参保地、医保类型和账户余额。
-- 费用明细上传：校验药品、诊疗、耗材、检查明细，生成上传批次号并做重复检查。
-- 预结算计算：按医保目录和参保地政策返回医保报销、个人账户支付、自费金额等分项。
-- 正式结算与冲正：生成结算单号，支持当日全额回退。
-- 结算单查询与对账：按结算单号、参保人和日期范围查询，提供日终汇总。
+- 费用明细上传：校验药品、诊疗、耗材、检查明细（金额须等于单价×数量），生成上传批次号并持久化批次、明细与就诊号；同一就诊号只允许存在一个未冲正批次。
+- 预结算计算：只提交批次号与参保地，服务端基于已冻结的批次明细核算并生成预结算凭证，支持多次预结算比对（旧凭证自动作废）。
+- 正式结算与冲正：正式结算只认凭证号，同一凭证不能重复成功（网络重试幂等返回原单）；支持当日全额冲正，冲正后原批次保留、同一就诊号可重新上传。
+- 结算单查询与对账：按结算单号、参保人、来源批次、就诊号和日期范围查询，返回来源批次与冲正时间；日终汇总排除已冲正金额。
 - API 文档与权限：Swagger UI、API Key + JWT 双重认证、调用审计日志。
 
 ## 访问地址
@@ -35,6 +35,39 @@ curl -s http://localhost:19935/api/insured/verify \
   -H "X-API-Key: demo-api-key" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"id_card":"110101199001010012","medical_card_no":"YB00010001"}'
+```
+
+### 以费用批次为准的结算链路
+
+```bash
+# 1) 费用上传：保存批次、明细与就诊号，金额此后冻结
+BATCH=$(curl -s -X POST http://localhost:19935/api/settlements/expenses \
+  -H "Content-Type: application/json" -H "X-API-Key: demo-api-key" -H "Authorization: Bearer $TOKEN" \
+  -d '{"insured_id":"INS010012","visit_no":"V20260925001","items":[
+        {"item_code":"A0001","name":"诊查费","category":"诊疗","catalog_class":"甲类",
+         "unit_price":"20.00","quantity":1,"amount":"20.00","self_pay_ratio":0}]}' \
+  | python -c "import sys,json;print(json.load(sys.stdin)['batch_no'])")
+
+# 2) 预结算：只提交批次号与参保地，服务端核算并返回凭证号
+VOUCHER=$(curl -s -X POST http://localhost:19935/api/settlements/pre-settle \
+  -H "Content-Type: application/json" -H "X-API-Key: demo-api-key" -H "Authorization: Bearer $TOKEN" \
+  -d "{\"batch_no\":\"$BATCH\",\"region\":\"北京市\"}" \
+  | python -c "import sys,json;print(json.load(sys.stdin)['voucher_no'])")
+
+# 3) 正式结算：只认凭证号；重复/重试调用幂等返回同一张结算单
+curl -s -X POST http://localhost:19935/api/settlements/confirm \
+  -H "Content-Type: application/json" -H "X-API-Key: demo-api-key" -H "Authorization: Bearer $TOKEN" \
+  -d "{\"voucher_no\":\"$VOUCHER\"}"
+
+# 4) 当日冲正：原批次保留并标记 REVERSED，同一就诊号可重新上传
+curl -s -X POST http://localhost:19935/api/settlements/<settlement_no>/reverse \
+  -H "X-API-Key: demo-api-key" -H "Authorization: Bearer $TOKEN"
+
+# 5) 结算列表（带来源批次 batch_no 与冲正时间 reversed_at），日终汇总排除已冲正金额
+curl -s "http://localhost:19935/api/settlements?visit_no=V20260925001" \
+  -H "X-API-Key: demo-api-key" -H "Authorization: Bearer $TOKEN"
+curl -s "http://localhost:19935/api/reconciliation/daily?day=2026-09-25" \
+  -H "X-API-Key: demo-api-key" -H "Authorization: Bearer $TOKEN"
 ```
 
 ## 技术栈

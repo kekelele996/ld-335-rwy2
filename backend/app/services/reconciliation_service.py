@@ -16,14 +16,24 @@ def daily_summary(day: date, db: Session, principal: dict) -> dict:
             SettlementRecord.created_at <= end_at,
         )
     ).all()
-    total_amount = sum((record.total_amount for record in records), Decimal("0.00"))
-    success_count = sum(1 for record in records if record.status == "SUCCESS")
-    failed_count = sum(1 for record in records if record.status not in {"SUCCESS", "REVERSED"})
+
+    success_records = [r for r in records if r.status == "SUCCESS"]
+    reversed_records = [r for r in records if r.status == "REVERSED"]
+    failed_records = [r for r in records if r.status not in {"SUCCESS", "REVERSED"}]
+
+    gross_amount = sum((r.total_amount for r in records), Decimal("0.00"))
+    # 已冲正金额不计入日终汇总，净额 = 成功未冲正金额
+    net_amount = sum((r.total_amount for r in success_records), Decimal("0.00"))
+    reversed_amount = sum((r.total_amount for r in reversed_records), Decimal("0.00"))
+
     return {
         "day": day.isoformat(),
         "total_count": len(records),
-        "success_count": success_count,
-        "failed_count": failed_count,
-        "total_amount": str(total_amount),
-        "manual_review_count": failed_count,
+        "success_count": len(success_records),
+        "reversed_count": len(reversed_records),
+        "failed_count": len(failed_records),
+        "gross_amount": str(gross_amount),
+        "reversed_amount": str(reversed_amount),
+        "total_amount": str(net_amount),
+        "manual_review_count": len(failed_records),
     }
