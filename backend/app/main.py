@@ -2,8 +2,8 @@ from fastapi import FastAPI, Request
 
 from app.api.router import api_router
 from app.core.logging import logger
+from app import models
 from app.db.session import Base, engine
-from app.models import settlement
 
 app = FastAPI(title="gbinsureapi 医保智能结算API网关", version="1.0.0")
 
